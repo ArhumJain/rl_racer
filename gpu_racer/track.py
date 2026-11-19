@@ -1,8 +1,8 @@
 """Batched tensor versions of the ``racer_rl.Track`` queries the racing env makes each step.
 
-Every query is computed in float64, whatever precision the car dynamics run in: the
+Queries run in float64 unless told otherwise (Apple GPUs have no float64): the
 centerline arcs have radii up to about 30 km, and their centres are that far away,
-so float32 would lose millimetres in the lateral offset.
+so float32 loses about a millimetre in the lateral offset.
 """
 
 from __future__ import annotations
@@ -26,13 +26,11 @@ def wrap_to_pi(angle: torch.Tensor) -> torch.Tensor:
 class TrackTables:
     """The track's centerline arcs and widths as tensors, with batched queries."""
 
-    def __init__(self, track: Track, device: torch.device | str) -> None:
+    def __init__(self, track: Track, device: torch.device | str, dtype: torch.dtype = torch.float64) -> None:
         lanes = track.lanes
         if not all(isinstance(lane, CircularLane) for lane in lanes):
             raise NotImplementedError("only tracks made of circular arcs are supported")
-        as_tensor = lambda values, dtype=torch.float64: torch.as_tensor(
-            np.asarray(values), dtype=dtype, device=device
-        )
+        as_tensor = lambda values, kind=dtype: torch.as_tensor(np.asarray(values), dtype=kind, device=device)
         self.length = track.length
         self.starts = as_tensor(track.starts)
         self.lengths = as_tensor([lane.length for lane in lanes])

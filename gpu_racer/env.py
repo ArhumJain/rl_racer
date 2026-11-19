@@ -72,30 +72,29 @@ class BatchRacingEnv:
             raise NotImplementedError("only dynamics='dynamic' is ported")
         self.device = torch.device(device)
         self.dtype = dtype
+        # Track queries and bookkeeping in float64, except on Apple GPUs, which lack it
+        self.precise = torch.float32 if self.device.type == "mps" else torch.float64
         self.num_envs = n_envs
         self.reward = reward
         self.auto_reset = auto_reset
-        self.track = TrackTables(Track.from_name(track), self.device)
-        self.lookahead = torch.as_tensor(LOOKAHEAD, dtype=torch.float64, device=self.device)
+        self.track = TrackTables(Track.from_name(track), self.device, self.precise)
+        self.lookahead = torch.as_tensor(LOOKAHEAD, dtype=self.precise, device=self.device)
         self.observation_space = spaces.Box(-np.inf, np.inf, shape=(7 + len(LOOKAHEAD),), dtype=np.float32)
         self.action_space = spaces.Box(-1.0, 1.0, shape=(2,), dtype=np.float32)
         self.generator = torch.Generator(device=self.device).manual_seed(seed)
 
-        def per_env(standing_value, other_value) -> torch.Tensor:
-            values = torch.full((n_envs,), float("inf") if other_value is None else other_value,
-                                dtype=torch.float64, device=self.device)
-            values[:standing_start_envs] = float("inf") if standing_value is None else standing_value
+        if not random_start:
+            standing_start_envs, standing_duration, standing_laps = n_envs, duration, laps
+
+        def per_env(standing_value, other_value, dtype) -> torch.Tensor:
+            values = torch.full((n_envs,), other_value, dtype=dtype, device=self.device)
+            values[:standing_start_envs] = standing_value
             return values
 
-        self.standing = torch.zeros(n_envs, dtype=torch.bool, device=self.device)
-        if random_start:
-            self.standing[:standing_start_envs] = True
-            self.duration = per_env(standing_duration, duration)
-            self.lap_limit = per_env(standing_laps, laps)
-        else:
-            self.standing[:] = True
-            self.duration = per_env(duration, duration)
-            self.lap_limit = per_env(laps, laps)
+        self.standing = per_env(True, False, torch.bool)
+        self.step_limit = per_env(_steps_to_reach(standing_duration), _steps_to_reach(duration), torch.long)
+        no_limit = lambda laps: float("inf") if laps is None else float(laps)
+        self.lap_limit = per_env(no_limit(standing_laps), no_limit(laps), self.precise)
 
         def zeros(dtype, *shape) -> torch.Tensor:
             return torch.zeros(n_envs, *shape, dtype=dtype, device=self.device)
@@ -106,15 +105,16 @@ class BatchRacingEnv:
         self.sideslip = zeros(dtype)
         self.lateral_acceleration = zeros(dtype)
         self.speed_before = zeros(dtype)
+        self.steps = zeros(torch.long)
         self.segment = zeros(torch.long)
-        self.progress = zeros(torch.float64)
-        self.lateral = zeros(torch.float64)
-        self.half_width = zeros(torch.float64)
+        self.progress = zeros(self.precise)
+        self.lateral = zeros(self.precise)
+        self.half_width = zeros(self.precise)
         self.on_track = zeros(torch.bool)
-        self.distance = zeros(torch.float64)
-        self.laps = zeros(torch.float64)
-        self.time = zeros(torch.float64)
-        self.lap_start_time = zeros(torch.float64)
+        self.distance = zeros(self.precise)
+        self.laps = zeros(self.precise)
+        self.time = zeros(self.precise)
+        self.lap_start_time = zeros(self.precise)
 
     def reset(self) -> torch.Tensor:
         self._reset_rows(torch.ones(self.num_envs, dtype=torch.bool, device=self.device))
@@ -126,25 +126,25 @@ class BatchRacingEnv:
     def _reset_rows(self, rows: torch.Tensor) -> None:
         n = self.num_envs
         uniform = lambda low, high: low + (high - low) * torch.rand(
-            n, dtype=torch.float64, device=self.device, generator=self.generator
+            n, dtype=self.precise, device=self.device, generator=self.generator
         )
         start = torch.where(self.standing, 0.0, uniform(0.0, self.track.length))
         lateral = torch.where(self.standing, 0.0, uniform(-0.5, 0.5) * self.track.half_width(start))
         speed = torch.where(self.standing, 0.0, uniform(0.0, 20.0))
-        state = torch.zeros(n, 7, dtype=torch.float64, device=self.device)
+        state = torch.zeros(n, 7, dtype=self.precise, device=self.device)
         state[:, :2] = self.track.position(start, lateral)
         state[:, 2] = self.track.heading(start)
         state[:, 3] = speed
         self.state[rows] = state[rows].to(self.dtype)
         for tensor in (self.applied, self.previous_command, self.sideslip, self.lateral_acceleration,
-                       self.distance, self.laps, self.time, self.lap_start_time):
+                       self.steps, self.distance, self.laps, self.time, self.lap_start_time):
             tensor[rows] = 0
         self.speed_before[rows] = speed[rows].to(self.dtype)
         self.segment[rows] = self.track.segment_at(start)[rows]
         self._locate(rows)
 
     def _locate(self, rows: torch.Tensor | None = None) -> None:
-        segment, s, lateral = self.track.locate(self.state[:, :2].to(torch.float64), self.segment)
+        segment, s, lateral = self.track.locate(self.state[:, :2].to(self.precise), self.segment)
         half_width = self.track.half_width(s)
         if rows is None:
             rows = torch.ones(self.num_envs, dtype=torch.bool, device=self.device)
@@ -156,19 +156,19 @@ class BatchRacingEnv:
 
     def observe(self) -> torch.Tensor:
         speed, yaw_rate, steering = self.state[:, 3], self.state[:, 5], self.state[:, 6]
-        heading_error = wrap_to_pi(self.state[:, 2].to(torch.float64) - self.track.heading(self.progress))
+        heading_error = wrap_to_pi(self.state[:, 2].to(self.precise) - self.track.heading(self.progress))
         curvatures = self.track.curvature(self.progress[:, None] + self.lookahead)
         return torch.cat(
             [
                 torch.stack(
                     [
-                        (speed / Car.MAX_SPEED).to(torch.float64),
+                        (speed / Car.MAX_SPEED).to(self.precise),
                         self.lateral / self.half_width,
                         torch.sin(heading_error),
                         torch.cos(heading_error),
-                        (steering / STEERING_RANGE[1]).to(torch.float64),
-                        self.sideslip.to(torch.float64),
-                        yaw_rate.to(torch.float64),
+                        (steering / STEERING_RANGE[1]).to(self.precise),
+                        self.sideslip.to(self.precise),
+                        yaw_rate.to(self.precise),
                     ],
                     -1,
                 ),
@@ -187,6 +187,7 @@ class BatchRacingEnv:
         self.applied = torch.stack([acceleration, steering_command], -1)
         self.speed_before = self.state[:, 3].clone()
         self.time = self.time + dt
+        self.steps = self.steps + 1
         for _ in range(FRAMES):
             self._frame(1 / SIMULATION_FREQUENCY)
 
@@ -212,7 +213,7 @@ class BatchRacingEnv:
             progress=cast(step_distance),
             speed=car[:, 3],
             lateral=cast(self.lateral),
-            heading_error=cast(wrap_to_pi(car[:, 2].to(torch.float64) - self.track.heading(self.progress))),
+            heading_error=cast(wrap_to_pi(car[:, 2].to(self.precise) - self.track.heading(self.progress))),
             on_track=self.on_track,
             pedal=command[:, 0],
             steering=command[:, 1],
@@ -238,7 +239,7 @@ class BatchRacingEnv:
         else:
             reward = torch.broadcast_to(torch.as_tensor(self.reward(step), device=self.device), (self.num_envs,))
         terminated = ~self.on_track
-        truncated = (self.laps >= self.lap_limit) | (self.time >= self.duration)
+        truncated = (self.laps >= self.lap_limit) | (self.steps >= self.step_limit)
         info = {"final_observation": observation, "distance": self.distance, "laps": self.laps,
                 "lap_time": lap_time}
         if self.auto_reset:
@@ -308,3 +309,18 @@ def _derivative(state: tuple, steering: torch.Tensor, pedal: torch.Tensor) -> tu
         lateral + (1 - dynamic) * kinematic_lateral,
         yaw + (1 - dynamic) * kinematic_yaw,
     )
+
+
+def _steps_to_reach(duration: float) -> int:
+    """Policy steps until the env's clock, which adds 1 / POLICY_FREQUENCY each step, reaches ``duration``.
+
+    The count is taken in float64 the way the env accumulates its clock, so a time
+    limit ends on the same step as in ``make_env`` whatever precision the batch uses.
+    """
+    if duration == float("inf"):
+        return 2**62
+    clock, steps = 0.0, 0
+    while clock < duration:
+        clock += 1 / POLICY_FREQUENCY
+        steps += 1
+    return steps

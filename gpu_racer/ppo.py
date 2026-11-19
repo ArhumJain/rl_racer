@@ -153,6 +153,7 @@ class PPO:
         target = self.num_timesteps + total_timesteps if not reset_num_timesteps else total_timesteps
 
         while self.num_timesteps < target:
+            round_began, callback_seconds = time.perf_counter(), 0.0
             callback.on_rollout_start()
             finished_returns, finished_lengths = [], []
             for k in range(self.n_steps):
@@ -180,8 +181,11 @@ class PPO:
                     buffer[name][k] = value_k
                 observation, episode_start = next_observation, done.to(torch.float32)
                 self.num_timesteps += n
+                callback_began = time.perf_counter()
                 callback.update_locals(locals())
-                if not callback.on_step():
+                stop = not callback.on_step()
+                callback_seconds += time.perf_counter() - callback_began
+                if stop:
                     callback.on_training_end()
                     return self
 
@@ -196,13 +200,19 @@ class PPO:
 
             iteration += 1
             progress_remaining = 1.0 - (self.num_timesteps - start_timesteps) / max(total_timesteps, 1)
+            rollout_seconds = time.perf_counter() - round_began - callback_seconds
+            train_began = time.perf_counter()
             self._train(buffer, advantages, returns, progress_remaining)
+            train_seconds = time.perf_counter() - train_began
             if log_interval and iteration % log_interval == 0:
                 elapsed = max(time.time() - began, 1e-9)
                 if self.ep_info_buffer:
                     self.logger.record("rollout/ep_rew_mean", float(np.mean([e["r"] for e in self.ep_info_buffer])))
                     self.logger.record("rollout/ep_len_mean", float(np.mean([e["l"] for e in self.ep_info_buffer])))
                 self.logger.record("time/iterations", iteration)
+                self.logger.record("time/round_rollout_s", round(rollout_seconds, 2))
+                self.logger.record("time/round_callbacks_s", round(callback_seconds, 2))
+                self.logger.record("time/round_train_s", round(train_seconds, 2))
                 self.logger.record("time/fps", int((self.num_timesteps - start_timesteps) / elapsed))
                 self.logger.record("time/time_elapsed", int(elapsed))
                 self.logger.record("time/total_timesteps", self.num_timesteps)

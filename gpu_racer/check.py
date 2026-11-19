@@ -66,9 +66,9 @@ def compare(device: str, dtype: torch.dtype, n_random: int, n_standing: int, ste
     batch.state = as_tensor([car_state(env) for env in real], dtype)
     batch.speed_before = batch.state[:, 3].clone()
     batch.segment = as_tensor([env.unwrapped.segment for env in real], torch.long)
-    batch.progress = as_tensor([env.unwrapped.progress for env in real], torch.float64)
-    batch.lateral = as_tensor([env.unwrapped.lateral for env in real], torch.float64)
-    batch.half_width = as_tensor([env.unwrapped.half_width for env in real], torch.float64)
+    batch.progress = as_tensor([env.unwrapped.progress for env in real], batch.precise)
+    batch.lateral = as_tensor([env.unwrapped.lateral for env in real], batch.precise)
+    batch.half_width = as_tensor([env.unwrapped.half_width for env in real], batch.precise)
     batch.on_track = as_tensor([env.unwrapped.on_track for env in real], torch.bool)
     errors = {"observation": np.abs(batch.observe().cpu().numpy() - observations).max()}
 
@@ -83,7 +83,7 @@ def compare(device: str, dtype: torch.dtype, n_random: int, n_standing: int, ste
         perturbation = 0.9 * perturbation + noise * rng.standard_normal((n, 2))
         perturbation[:n_standing] = 0.0
         actions = np.array([driver(o) for o in observations]) + perturbation
-        batch_obs, batch_reward, batch_terminated, batch_truncated, info = batch.step(as_tensor(actions, torch.float64))
+        batch_obs, batch_reward, batch_terminated, batch_truncated, info = batch.step(as_tensor(actions, dtype))
         batch_obs, batch_reward = batch_obs.cpu().numpy(), batch_reward.cpu().numpy()
         batch_state, batch_segment = batch.state.cpu().numpy(), batch.segment.cpu().numpy()
         batch_lap_time = info["lap_time"].cpu().numpy()
