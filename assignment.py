@@ -130,27 +130,24 @@ model = PPO(
     n_epochs=10,
     gamma=0.99,
     learning_rate=3e-4,
-    policy_kwargs=dict(log_std_init=-1.0),
+    policy_kwargs=dict(net_arch=dict(pi=[512, 512], vf=[512, 512]), log_std_init=-1.0),
     device="cpu",
     verbose=1,
     tensorboard_log=str(RUN / "tb"),
 )
 
-model.learn(total_timesteps=5000000000)
+model.learn(total_timesteps=5_000_000)
 model.save(RUN / "model")
 train_env.close()
-
 
 #
 # Define `policy`: a function that takes an observation and returns an action.
 
-
 # TODO set your trained policy here
-your_policy = None 
+your_policy = model
 
 def policy(obs: np.ndarray) -> np.ndarray:
     return your_policy.predict(obs, deterministic=True)[0]
-
 
 # ## 4. Test your policy by racing it
 #
