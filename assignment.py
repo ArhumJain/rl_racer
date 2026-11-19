@@ -131,7 +131,7 @@ model = PPO(
     gamma=0.99,
     learning_rate=3e-4,
     policy_kwargs=dict(net_arch=dict(pi=[512, 512], vf=[512, 512]), log_std_init=-1.0),
-    device="cpu",
+    device="cuda",
     verbose=1,
     tensorboard_log=str(RUN / "tb"),
 )
