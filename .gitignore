@@ -19,3 +19,4 @@ solutions/
 .ruff_cache/
 .DS_Store
 .claude/
+.python-version

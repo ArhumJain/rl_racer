@@ -116,7 +116,7 @@ def main():
 
     train_env = make_vec_env(
         make_env,
-        n_envs=32,
+        n_envs=8,
         seed=42,
         env_kwargs={"track": TRACK, "reward": reward, "dynamics": DYNAMICS},
         vec_env_cls=SubprocVecEnv,
@@ -139,7 +139,7 @@ def main():
         tensorboard_log=str(RUN / "tb"),
     )
 
-    model.learn(total_timesteps=5_000_000)
+    model.learn(total_timesteps=1_000_000)
     model.save(RUN / "model")
     train_env.close()
 
