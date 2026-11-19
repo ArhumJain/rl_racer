@@ -79,25 +79,6 @@ def reward(step: Step) -> float:
     return reward
 
 
-# ### Check your reward function
-#
-# Here we can do some sanity checks with some dummy policies
-
-
-drivers = {
-    "step on gas": lambda obs: np.array([1.0, 0.0]),
-    "not moving": lambda obs: np.array([0.0, 0.0]),
-}
-
-for name, driver in drivers.items():
-    r = rollout(driver, reward, TRACK, dynamics=DYNAMICS)
-    ending = "off track" if r["off_track"] else "driving"
-    print(
-        f"{name:22s} return {r['return']:8.1f}   "
-        f"{r['distance']:5.0f} m in {r['time']:4.1f} s, {ending}"
-    )
-
-
 # ## 3. Your Racing Agent
 #
 # Good implementations of various RL algorithms can be found in [Stable-Baselines3](https://stable-baselines3.readthedocs.io/).
@@ -109,54 +90,80 @@ from stable_baselines3.common.callbacks import BaseCallback
 from stable_baselines3.common.env_util import make_vec_env
 from stable_baselines3.common.vec_env import SubprocVecEnv
 
-RUN = Path("runs/your_policy")  
 
-train_env = make_vec_env(
-    make_env,
-    n_envs=32,
-    seed=42,
-    env_kwargs={"track": TRACK, "reward": reward, "dynamics": DYNAMICS},
-    vec_env_cls=SubprocVecEnv,
-    monitor_dir=str(RUN / "monitor"),  # each environment logs its episodes there
-)
+def main():
+    # ### Check your reward function
+    #
+    # Here we can do some sanity checks with some dummy policies
 
 
-# TODO train your policy here
-model = PPO(
-    "MlpPolicy",
-    train_env,
-    n_steps=1024,
-    batch_size=2048,
-    n_epochs=10,
-    gamma=0.99,
-    learning_rate=3e-4,
-    policy_kwargs=dict(net_arch=dict(pi=[512, 512], vf=[512, 512]), log_std_init=-1.0),
-    device="cuda",
-    verbose=1,
-    tensorboard_log=str(RUN / "tb"),
-)
+    drivers = {
+        "step on gas": lambda obs: np.array([1.0, 0.0]),
+        "not moving": lambda obs: np.array([0.0, 0.0]),
+    }
 
-model.learn(total_timesteps=5_000_000)
-model.save(RUN / "model")
-train_env.close()
-
-#
-# Define `policy`: a function that takes an observation and returns an action.
-
-# TODO set your trained policy here
-your_policy = model
-
-def policy(obs: np.ndarray) -> np.ndarray:
-    return your_policy.predict(obs, deterministic=True)[0]
-
-# ## 4. Test your policy by racing it
-#
-# Here we will perform a single car run in the time trial format of 3 laps. (is your policy stable enough to finish at least 3 laps?)
-#
-# The whole time trial is saved, submit this `.npz` file to the Google Drive linked in the assignment `.pdf` or Piazza
+    for name, driver in drivers.items():
+        r = rollout(driver, reward, TRACK, dynamics=DYNAMICS)
+        ending = "off track" if r["off_track"] else "driving"
+        print(
+            f"{name:22s} return {r['return']:8.1f}   "
+            f"{r['distance']:5.0f} m in {r['time']:4.1f} s, {ending}"
+        )
 
 
-# note 1st lap starts from 0 speed so it will likely be slower than other laps
-result = time_trial(policy, TRACK, video="videos/your_policy", dynamics=DYNAMICS,laps=3, save_trial="laps/your_name_or_nickname")
-print(result)
-show_video(result.video)
+
+    RUN = Path("runs/your_policy")  
+
+    train_env = make_vec_env(
+        make_env,
+        n_envs=32,
+        seed=42,
+        env_kwargs={"track": TRACK, "reward": reward, "dynamics": DYNAMICS},
+        vec_env_cls=SubprocVecEnv,
+        monitor_dir=str(RUN / "monitor"),  # each environment logs its episodes there
+    )
+
+
+    # TODO train your policy here
+    model = PPO(
+        "MlpPolicy",
+        train_env,
+        n_steps=1024,
+        batch_size=2048,
+        n_epochs=10,
+        gamma=0.99,
+        learning_rate=3e-4,
+        policy_kwargs=dict(net_arch=dict(pi=[512, 512], vf=[512, 512]), log_std_init=-1.0),
+        device="cuda",
+        verbose=1,
+        tensorboard_log=str(RUN / "tb"),
+    )
+
+    model.learn(total_timesteps=5_000_000)
+    model.save(RUN / "model")
+    train_env.close()
+
+    #
+    # Define `policy`: a function that takes an observation and returns an action.
+
+    # TODO set your trained policy here
+    your_policy = model
+
+    def policy(obs: np.ndarray) -> np.ndarray:
+        return your_policy.predict(obs, deterministic=True)[0]
+
+    # ## 4. Test your policy by racing it
+    #
+    # Here we will perform a single car run in the time trial format of 3 laps. (is your policy stable enough to finish at least 3 laps?)
+    #
+    # The whole time trial is saved, submit this `.npz` file to the Google Drive linked in the assignment `.pdf` or Piazza
+
+
+    # note 1st lap starts from 0 speed so it will likely be slower than other laps
+    result = time_trial(policy, TRACK, video="videos/your_policy", dynamics=DYNAMICS,laps=3, save_trial="laps/your_name_or_nickname")
+    print(result)
+    show_video(result.video)
+
+
+if __name__ == "__main__":
+    main()
