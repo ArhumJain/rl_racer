@@ -137,7 +137,7 @@ def main():
         tensorboard_log=str(RUN / "tb"),
     )
 
-    model.learn(total_timesteps=1_000_000)
+    model.learn(total_timesteps=100_000_000)
     model.save(RUN / "model")
     train_env.close()
 
